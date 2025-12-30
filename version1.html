@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Push-up Trainer</title>
+    <!-- TensorFlow.js 및 MoveNet -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+
+    <style>
+        body {
+            font-family: 'Suit', sans-serif;
+            background-color: #121212;
+            color: #ecf0f1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        
+        h1 { margin-bottom: 20px; font-size: 1.5rem; }
+
+        /* 버튼 그룹 */
+        .btn-group { display: flex; gap: 8px; margin-bottom: 15px; flex-wrap: wrap; justify-content: center; }
+        .btn {
+            padding: 10px 16px; border-radius: 8px; font-weight: bold; cursor: pointer; border: none; font-size: 0.9rem;
+            transition: 0.2s;
+        }
+        .btn:active { transform: scale(0.95); }
+        .btn-blue { background-color: #3498db; color: white; }
+        .btn-green { background-color: #2ecc71; color: white; }
+        .btn-red { background-color: #e74c3c; color: white; }
+        .btn-yellow { background-color: #f1c40f; color: #2c3e50; }
+        .btn-outline { background: transparent; border: 2px solid #bdc3c7; color: #bdc3c7; display: inline-block; text-align: center;}
+        
+        input[type=file] { display: none; }
+
+        /* 비디오 컨테이너 */
+        .container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            aspect-ratio: 4/3;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.5);
+        }
+        video { 
+            position: absolute; top:0; left:0;
+            width: 100%; height: 100%; object-fit: cover; 
+        }
+        canvas { 
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
+        }
+
+        /* 타임라인 (슬라이더) */
+        .timeline-box {
+            width: 100%; max-width: 640px; margin-top: 10px;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .seek-bar {
+            flex-grow: 1; height: 6px; cursor: pointer;
+            accent-color: #3498db;
+        }
+        .time-text { font-family: monospace; font-size: 0.9rem; color: #bdc3c7; width: 45px;}
+
+        /* 상태창 */
+        .status-box {
+            display: flex; gap: 10px; margin-top: 20px; width: 100%; max-width: 640px;
+        }
+        .card {
+            background: #2c3e50; padding: 15px; border-radius: 10px;
+            flex: 1; text-align: center;
+        }
+        .val { font-size: 2rem; font-weight: bold; color: #2ecc71; }
+        .label { font-size: 0.8rem; color: #bdc3c7; }
+
+        #msg { margin-top: 10px; font-weight: bold; color: #3498db; height: 24px; text-align: center;}
+        
+        /* 로딩 화면 */
+        #loading {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); z-index: 999;
+            display: flex; justify-content: center; align-items: center; font-size: 1.5rem; flex-direction: column;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="loading">
+        <div>AI 모델 로딩중...</div>
+        <div style="font-size:1rem; color:#aaa; margin-top:10px;">잠시만 기다려주세요</div>
+    </div>
+
+    <h1>AI Push-up Trainer</h1>
+
+    <div class="btn-group">
+        <button class="btn btn-blue" onclick="startCamera()">📷 카메라</button>
+        <button class="btn btn-yellow" onclick="loadExample()">▶ 예시 영상</button>
+        <label for="file-in" class="btn btn-outline">📂 업로드</label>
+        <input type="file" id="file-in" accept="video/*">
+    </div>
+
+    <div class="btn-group">
+        <button id="btn-record" class="btn btn-green" onclick="toggleRecord()" disabled>⏺ 녹화 시작</button>
+        <button class="btn btn-red" onclick="resetCounter()">↺ 리셋</button>
+    </div>
+
+    <div class="container">
+        <video id="video" playsinline muted></video>
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <!-- 타임라인 슬라이더 -->
+    <div class="timeline-box">
+        <span id="curr-time" class="time-text">0:00</span>
+        <input type="range" id="seek-bar" class="seek-bar" min="0" value="0" step="0.1">
+        <span id="dur-time" class="time-text">0:00</span>
+    </div>
+
+    <div id="msg">카메라를 켜거나 예시/업로드 영상을 선택하세요.</div>
+
+    <div class="status-box">
+        <div class="card">
+            <div class="label">COUNT</div>
+            <div class="val" id="count-val">0</div>
+        </div>
+        <div class="card">
+            <div class="label">ANGLE</div>
+            <div class="val" id="angle-val" style="color:#f1c40f">0°</div>
+        </div>
+        <div class="card">
+            <div class="label">STATUS</div>
+            <div class="val" id="status-val" style="font-size:1.2rem; line-height: 2.2rem;">Ready</div>
+        </div>
+    </div>
+
+    <a id="download-link" style="display:none"></a>
+
+<script>
+    let detector;
+    let video, canvas, ctx;
+    let seekBar, currTimeText, durTimeText;
+    let rafId;
+
+    // 로직 변수
+    let count = 0;
+    let dir = 0; // 0: Down 대기, 1: Up 대기
+    const DOWN_ANGLE = 90; 
+    const UP_ANGLE = 160;
+
+    // 녹화 변수
+    let mediaRecorder;
+    let recordedChunks = [];
+    let isRecording = false;
+    const btnRecord = document.getElementById('btn-record');
+
+    async function init() {
+        video = document.getElementById('video');
+        canvas = document.getElementById('canvas');
+        ctx = canvas.getContext('2d');
+        seekBar = document.getElementById('seek-bar');
+        currTimeText = document.getElementById('curr-time');
+        durTimeText = document.getElementById('dur-time');
+
+        // 모델 로드
+        const model = poseDetection.SupportedModels.MoveNet;
+        const detectorConfig = { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING };
+        detector = await poseDetection.createDetector(model, detectorConfig);
+
+        document.getElementById('loading').style.display = 'none';
+
+        // 이벤트 리스너: 파일 업로드
+        document.getElementById('file-in').addEventListener('change', handleFile);
+
+        // 비디오 메타데이터 로드 (길이, 사이즈)
+        video.addEventListener('loadedmetadata', () => {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            if(video.videoWidth > 0) {
+                video.parentElement.style.aspectRatio = `${video.videoWidth}/${video.videoHeight}`;
+            }
+            seekBar.max = video.duration;
+            durTimeText.innerText = formatTime(video.duration);
+            
+            // 영상이 로드되면 자동 재생
+            video.play();
+            resetCounter();
+            detectLoop();
+        });
+
+        // 비디오 재생 시간 업데이트 (슬라이더 이동)
+        video.addEventListener('timeupdate', () => {
+            if (!isNaN(video.currentTime)) {
+                seekBar.value = video.currentTime;
+                currTimeText.innerText = formatTime(video.currentTime);
+            }
+        });
+
+        // 비디오 끝남
+        video.addEventListener('ended', () => {
+            if (isRecording) stopRecording();
+            cancelAnimationFrame(rafId);
+        });
+
+        // 슬라이더 조작 (Seek)
+        seekBar.addEventListener('input', () => {
+            video.currentTime = seekBar.value;
+            currTimeText.innerText = formatTime(video.currentTime);
+            
+            // 일시정지 상태여도 슬라이더 움직이면 분석 1회 실행 (스켈레톤 보이기 위함)
+            if (video.paused) {
+                predictAndDraw(); 
+            }
+        });
+    }
+
+    // --- 기능별 함수 ---
+
+    function formatTime(s) {
+        const m = Math.floor(s / 60);
+        const ss = Math.floor(s % 60);
+        return `${m}:${ss < 10 ? '0' : ''}${ss}`;
+    }
+
+    async function startCamera() {
+        if (rafId) cancelAnimationFrame(rafId);
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: 'environment', width: 640, height: 480 }, audio: false 
+            });
+            video.srcObject = stream;
+            // 카메라는 duration이 무한대이므로 슬라이더 비활성화
+            video.onloadedmetadata = () => {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                video.play();
+                seekBar.disabled = true;
+                detectLoop();
+            };
+            document.getElementById('msg').innerText = "카메라 실행 중";
+            btnRecord.disabled = false;
+            resetCounter();
+        } catch (err) {
+            alert("카메라 실패: " + err.message);
+        }
+    }
+
+    function handleFile(e) {
+        if (rafId) cancelAnimationFrame(rafId);
+        const file = e.target.files[0];
+        if(!file) return;
+        
+        loadVideoSource(URL.createObjectURL(file));
+    }
+
+    function loadExample() {
+        if (rafId) cancelAnimationFrame(rafId);
+        // GitHub에 올릴 때 같은 폴더에 example.mp4가 있어야 함
+        loadVideoSource('./example.mp4'); 
+    }
+
+    function loadVideoSource(src) {
+        // 기존 스트림 해제
+        if (video.srcObject) {
+            video.srcObject.getTracks().forEach(track => track.stop());
+            video.srcObject = null;
+        }
+        video.src = src;
+        seekBar.disabled = false;
+        btnRecord.disabled = false;
+        document.getElementById('msg').innerText = "영상 분석 중";
+    }
+
+    // --- AI 루프 ---
+    async function detectLoop() {
+        if (!detector) return;
+
+        // 비디오가 재생 중이거나, 로드된 상태면 계속 분석
+        if (!video.paused && !video.ended) {
+            await predictAndDraw();
+            rafId = requestAnimationFrame(detectLoop);
+        }
+    }
+
+    // 한 프레임 분석 및 그리기 (슬라이더 조작시에도 호출됨)
+    async function predictAndDraw() {
+        if(video.readyState < 2) return; // 데이터 부족 시 패스
+
+        const poses = await detector.estimatePoses(video);
+        
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 녹화 중일 때는 원본 프레임을 캔버스 바닥에 그려줘야 함
+        if (isRecording) {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        }
+
+        if (poses.length > 0) {
+            const kps = poses[0].keypoints;
+            processPose(kps);
+        }
+    }
+
+    function processPose(kps) {
+        // 5:L_Shoulder, 7:L_Elbow, 9:L_Wrist / 6:R_Shoulder, 8:R_Elbow, 10:R_Wrist
+        const leftScore = (kps[5].score + kps[7].score + kps[9].score) / 3;
+        const rightScore = (kps[6].score + kps[8].score + kps[10].score) / 3;
+        
+        const isLeft = leftScore > rightScore;
+        const s = isLeft ? kps[5] : kps[6];
+        const e = isLeft ? kps[7] : kps[8];
+        const w = isLeft ? kps[9] : kps[10];
+
+        if (s.score < 0.3 || e.score < 0.3 || w.score < 0.3) return;
+
+        const angle = calculateAngle(s, e, w);
+        
+        document.getElementById('angle-val').innerText = Math.round(angle) + "°";
+
+        // 카운트 로직
+        if (angle <= DOWN_ANGLE) {
+            if (dir === 0) {
+                dir = 1;
+                document.getElementById('status-val').innerText = "▼ Down";
+                document.getElementById('status-val').style.color = "#e74c3c";
+            }
+        }
+        if (angle >= UP_ANGLE) {
+            if (dir === 1) {
+                count++;
+                dir = 0;
+                document.getElementById('count-val').innerText = count;
+                document.getElementById('status-val').innerText = "▲ Up";
+                document.getElementById('status-val').style.color = "#2ecc71";
+            }
+        }
+
+        drawSkeleton(s, e, w, angle);
+    }
+
+    function calculateAngle(a, b, c) {
+        const rad = Math.atan2(c.y - b.y, c.x - b.x) - Math.atan2(a.y - b.y, a.x - b.x);
+        let ang = Math.abs(rad * 180.0 / Math.PI);
+        if (ang > 180.0) ang = 360 - ang;
+        return ang;
+    }
+
+    function drawSkeleton(s, e, w, angle) {
+        const color = (angle <= DOWN_ANGLE) ? '#00ff00' : '#3498db';
+        ctx.lineWidth = 5;
+        ctx.lineCap = 'round';
+        ctx.strokeStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y);
+        ctx.lineTo(e.x, e.y);
+        ctx.lineTo(w.x, w.y);
+        ctx.stroke();
+
+        ctx.fillStyle = 'white';
+        [s, e, w].forEach(p => {
+            ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, 2*Math.PI); ctx.fill();
+        });
+    }
+
+    function resetCounter() {
+        count = 0;
+        dir = 0;
+        document.getElementById('count-val').innerText = 0;
+        document.getElementById('angle-val').innerText = "0°";
+        document.getElementById('status-val').innerText = "Ready";
+    }
+
+    // --- 녹화 기능 ---
+    function toggleRecord() {
+        if (!isRecording) startRecording();
+        else stopRecording();
+    }
+
+    function startRecording() {
+        const stream = canvas.captureStream(30);
+        const options = { mimeType: 'video/webm; codecs=vp9' };
+        if (!MediaRecorder.isTypeSupported(options.mimeType)) options.mimeType = 'video/webm';
+
+        mediaRecorder = new MediaRecorder(stream, options);
+        recordedChunks = [];
+        mediaRecorder.ondataavailable = e => { if (e.data.size > 0) recordedChunks.push(e.data); };
+        mediaRecorder.onstop = exportVideo;
+        mediaRecorder.start();
+        isRecording = true;
+        
+        btnRecord.innerHTML = "⏹ 녹화 중지";
+        btnRecord.classList.replace('btn-green', 'btn-red');
+        document.getElementById('msg').innerText = "🔴 녹화 중...";
+    }
+
+    function stopRecording() {
+        if(mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+        isRecording = false;
+        btnRecord.innerHTML = "⏺ 녹화 시작";
+        btnRecord.classList.replace('btn-red', 'btn-green');
+    }
+
+    function exportVideo() {
+        const blob = new Blob(recordedChunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.getElementById('download-link');
+        a.href = url;
+        a.download = `pushup_${Date.now()}.webm`;
+        a.click();
+        URL.revokeObjectURL(url);
+        document.getElementById('msg').innerText = "녹화 저장 완료";
+    }
+
+    init();
+</script>
+</body>
+</html>
