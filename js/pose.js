@@ -22,31 +22,32 @@ class PoseDetector {
         }
     }
 
-    drawResults(ctx, keypoints, exerciseType, feedback) {
+    drawResults(ctx, keypoints, exerciseType) {
+        // Ensure we clear the canvas to show video underneath
         ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
 
+        if (!keypoints || keypoints.length === 0) return;
+
         // Draw Skeleton
-        this.drawSkeleton(ctx, keypoints);
+        this.drawSkeleton(ctx, keypoints, exerciseType);
 
         // Draw Keypoints
         keypoints.forEach(kp => {
             if (kp.score > 0.3) {
                 ctx.beginPath();
-                ctx.arc(kp.x, kp.y, 6, 0, 2 * Math.PI);
-                ctx.fillStyle = this.getKeypointColor(kp.name, exerciseType); // '#00ADB5'
+                ctx.arc(kp.x, kp.y, 8, 0, 2 * Math.PI); // Larger dots
+                ctx.fillStyle = '#FFFFFF';
                 ctx.fill();
-                ctx.strokeStyle = '#fff';
+                ctx.strokeStyle = this.getKeypointColor(kp.name, exerciseType);
+                ctx.lineWidth = 2;
                 ctx.stroke();
             }
         });
-
-        // specific drawing for exercises can go here (e.g. angles)
     }
 
-    drawSkeleton(ctx, keypoints) {
+    drawSkeleton(ctx, keypoints, exerciseType) {
         const adjacentPairs = poseDetection.util.getAdjacentPairs(this.model);
-        ctx.lineWidth = 4;
-        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 6; // Thicker lines
 
         adjacentPairs.forEach(([i, j]) => {
             const kp1 = keypoints[i];
@@ -56,13 +57,14 @@ class PoseDetector {
                 ctx.beginPath();
                 ctx.moveTo(kp1.x, kp1.y);
                 ctx.lineTo(kp2.x, kp2.y);
+                ctx.strokeStyle = (exerciseType === 'pushup') ? '#00ADB5' : '#FF4D4D';
                 ctx.stroke();
             }
         });
     }
 
     getKeypointColor(name, type) {
-        // Highlight relevant joints based on exercise
+        if (!name) return '#00ADB5';
         if (type === 'pushup') {
             if (name.includes('shoulder') || name.includes('elbow') || name.includes('wrist')) return '#00ff88';
         } else if (type === 'situp') {

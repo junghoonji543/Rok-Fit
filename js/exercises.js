@@ -1,13 +1,24 @@
 class ExerciseCounter {
     constructor() {
         this.reset();
+        // MoveNet Keypoint Indices
+        this.IDX = {
+            NOSE: 0,
+            L_SHOULDER: 5, R_SHOULDER: 6,
+            L_ELBOW: 7, R_ELBOW: 8,
+            L_WRIST: 9, R_WRIST: 10,
+            L_HIP: 11, R_HIP: 12,
+            L_KNEE: 13, R_KNEE: 14,
+            L_ANKLE: 15, R_ANKLE: 16
+        };
     }
 
     reset() {
         this.count = 0;
-        this.state = 0; // 0: Idle/Start, 1: Down/Action, 2: Up/Complete
+        this.state = 0; // 0: Start, 1: Action (Down/Up)
         this.feedback = "Ready";
-        this.mode = 'pushup'; // 'pushup' or 'situp'
+        this.mode = 'pushup';
+        this.debugText = "";
     }
 
     setMode(mode) {
@@ -15,66 +26,79 @@ class ExerciseCounter {
         this.reset();
     }
 
-    process(keypoints) {
-        if (!keypoints || keypoints.length === 0) return;
+    process(keypoints, ctx) {
+        if (!keypoints) return;
 
-        const kps = this.keypointsToMap(keypoints);
+        // Draw Debug Text on Canvas
+        if (ctx) {
+            ctx.font = '24px Arial';
+            ctx.fillStyle = 'yellow';
+            ctx.fillText(this.debugText, 20, 40);
+        }
 
         if (this.mode === 'pushup') {
-            this.processPushup(kps);
+            this.processPushup(keypoints);
         } else if (this.mode === 'situp') {
-            this.processSitup(kps);
+            this.processSitup(keypoints);
         }
 
         return {
             count: this.count,
             feedback: this.feedback,
-            debug: this.getDebugInfo(kps)
+            debug: this.debugText
         };
     }
 
-    keypointsToMap(keypoints) {
-        const map = {};
-        keypoints.forEach(kp => {
-            map[kp.name] = { x: kp.x, y: kp.y, score: kp.score };
-        });
-        return map;
+    getPoint(kps, idx) {
+        // Lower threshold (0.2) for robustness, especially in difficult angles like sit-ups
+        if (!kps[idx] || kps[idx].score < 0.1) return null;
+        return kps[idx];
     }
 
     // --- PUSH-UP LOGIC ---
     processPushup(kps) {
-        // Need Shoulder, Elbow, Wrist
-        // Check availability (left or right)
-        const leftConf = (kps['left_shoulder'].score + kps['left_elbow'].score + kps['left_wrist'].score) / 3;
-        const rightConf = (kps['right_shoulder'].score + kps['right_elbow'].score + kps['right_wrist'].score) / 3;
+        const ls = this.getPoint(kps, this.IDX.L_SHOULDER);
+        const le = this.getPoint(kps, this.IDX.L_ELBOW);
+        const lw = this.getPoint(kps, this.IDX.L_WRIST);
 
-        const side = leftConf > rightConf ? 'left' : 'right';
-        const s = kps[`${side}_shoulder`];
-        const e = kps[`${side}_elbow`];
-        const w = kps[`${side}_wrist`];
+        const rs = this.getPoint(kps, this.IDX.R_SHOULDER);
+        const re = this.getPoint(kps, this.IDX.R_ELBOW);
+        const rw = this.getPoint(kps, this.IDX.R_WRIST);
 
-        if (s.score < 0.3 || e.score < 0.3 || w.score < 0.3) {
+        // Choose side with better visibility
+        let side = null; // 'left' or 'right'
+        let s, e, w; // shoulder, elbow, wrist
+
+        const lScore = (ls?.score || 0) + (le?.score || 0) + (lw?.score || 0);
+        const rScore = (rs?.score || 0) + (re?.score || 0) + (rw?.score || 0);
+
+        if (lScore > rScore && lScore > 0.9) {
+            side = 'left'; s = ls; e = le; w = lw;
+        } else if (rScore > 0.9) {
+            side = 'right'; s = rs; e = re; w = rw;
+        }
+
+        if (!side) {
             this.feedback = "No Pose";
             return;
         }
 
         const angle = this.calculateAngle(s, e, w);
+        this.debugText = `Angle: ${Math.round(angle)}°`;
 
-        // State Machine
-        // State 0: Ready (Up)
-        // State 1: Down (Angle < 90) -> trigger "UP" readiness
-
+        // Logic
+        // Down: Angle < 90
+        // Up: Angle > 160
         if (angle <= 90) {
             if (this.state === 0 || this.state === 2) {
-                this.state = 1; // Down
+                this.state = 1;
                 this.feedback = "Down ▼";
             }
         } else if (angle >= 160) {
             if (this.state === 1) {
                 this.count++;
-                this.state = 2; // Up
+                this.state = 2;
                 this.feedback = "Up ▲ (Count!)";
-                // Play sound?
             } else {
                 this.feedback = "Ready";
             }
@@ -83,60 +107,62 @@ class ExerciseCounter {
 
     // --- SIT-UP LOGIC ---
     processSitup(kps) {
-        // Logic: 
-        // UP: Elbow close to Knee
-        // DOWN: Shoulders on ground (Torso horizontal)
+        // 1. Decide which side is visible (Left vs Right)
+        const leftScore = (kps[this.IDX.L_SHOULDER]?.score || 0) + (kps[this.IDX.L_HIP]?.score || 0) + (kps[this.IDX.L_KNEE]?.score || 0);
+        const rightScore = (kps[this.IDX.R_SHOULDER]?.score || 0) + (kps[this.IDX.R_HIP]?.score || 0) + (kps[this.IDX.R_KNEE]?.score || 0);
 
-        const leftConf = (kps['left_shoulder'].score + kps['left_hip'].score + kps['left_knee'].score) / 3;
-        const rightConf = (kps['right_shoulder'].score + kps['right_hip'].score + kps['right_knee'].score) / 3;
+        const isLeft = leftScore > rightScore;
+        const s = this.getPoint(kps, isLeft ? this.IDX.L_SHOULDER : this.IDX.R_SHOULDER);
+        const h = this.getPoint(kps, isLeft ? this.IDX.L_HIP : this.IDX.R_HIP);
+        const k = this.getPoint(kps, isLeft ? this.IDX.L_KNEE : this.IDX.R_KNEE);
+        const nose = this.getPoint(kps, this.IDX.NOSE);
 
-        const side = leftConf > rightConf ? 'left' : 'right';
-        const s = kps[`${side}_shoulder`];
-        const h = kps[`${side}_hip`];
-        const e = kps[`${side}_elbow`];
-        const k = kps[`${side}_knee`];
-
-
-        if (s.score < 0.3 || h.score < 0.3 || e.score < 0.3 || k.score < 0.3) {
-            this.feedback = "No Pose";
+        if (!s || !h || !k) {
+            this.feedback = "Pose?";
+            this.debugText = "Need Side Body";
             return;
         }
 
-        // 1. Check DOWN state (Lying down)
-        // Calculate Torso Angle relative to horizontal
-        // (If y difference is small, it's horizontal)
-        const torsoAngle = Math.abs(Math.atan2(s.y - h.y, s.x - h.x) * 180 / Math.PI);
-        // Horizontal means angle is near 0 or 180. Vertical means near 90.
-        // Actually, atan2(dy, dx). If lying flat, dy is small. S.y approx H.y.
+        // 2. UP CHECK: Nose close to Knee
+        // If nose is missing, fallback to Elbow-Knee? 
+        // Or just use Shoulder-Knee distance getting small?
+        // Let's stick to Nose-Knee if Nose exists, else Shoulder-Knee.
 
-        const isLyingDown = Math.abs(s.y - h.y) < 50; // Simple pixel diff heuristic or use angle
-        // Better: Use angle. If lying flat, angle is < 30 or > 150.
-        const isTorsoFlat = (torsoAngle < 30 || torsoAngle > 150);
+        let distTarget = 0;
+        let distRef = Math.hypot(s.x - h.x, s.y - h.y); // Torso length
 
-        // 2. Check UP state (Elbow-Knee touch)
-        const distEK = Math.hypot(e.x - k.x, e.y - k.y);
-        // Normalize distance by leg length or torso length to be scale invariant? 
-        // For now, use raw pixel threshold assuming standard distance, or normalize by Shoulder-Hip dist.
-        const distTorso = Math.hypot(s.x - h.x, s.y - h.y);
-        const normDist = distEK / distTorso; // If < 0.5 (Elbow is close to Knee relative to body size)
+        if (nose) {
+            distTarget = Math.hypot(nose.x - k.x, nose.y - k.y);
+        } else {
+            // Fallback: Shoulder to Knee
+            distTarget = Math.hypot(s.x - k.x, s.y - k.y);
+            // Relax threshold for Shoulder-Knee
+            distRef = distRef * 1.5;
+        }
 
-        const isTouching = normDist < 0.8; // Threshold to be tuned
+        const normDist = distTarget / distRef;
+        const isUp = normDist < 1.1; // < 1.1 means nose/shoulder is close to knee relative to torso
+
+        // 3. DOWN CHECK: Torso Flat (Horizontal)
+        // Check difference in Y between Shoulder and Hip
+        const dy = Math.abs(s.y - h.y);
+        const isDown = dy < 50;
+
+        this.debugText = `Dist:${normDist.toFixed(2)} | Flat:${Math.round(dy)}`;
 
         // State Machine
-        if (isTorsoFlat) {
-            if (this.state === 1) { // Was Up?
-                // Resetting for next rep
-                this.state = 0; // Ready / Down
+        if (isDown) {
+            if (this.state === 1) {
+                this.state = 0;
                 this.feedback = "Down (Reset)";
             } else {
                 this.feedback = "Ready";
-                this.state = 0;
             }
         }
 
-        if (isTouching) {
+        if (isUp) {
             if (this.state === 0) {
-                this.state = 1; // Up
+                this.state = 1;
                 this.count++;
                 this.feedback = "Sit-up! ▲";
             }
@@ -148,25 +174,5 @@ class ExerciseCounter {
         let ang = Math.abs(rad * 180.0 / Math.PI);
         if (ang > 180.0) ang = 360 - ang;
         return ang;
-    }
-
-    getDebugInfo(kps) {
-        if (this.mode === 'situp') {
-            // Return relevant values for debugging
-            // Using 'left' or 'right' logic duplicated here for brevity, practically should be stored class prop
-            const s = kps['left_shoulder'];
-            const h = kps['left_hip'];
-            const e = kps['left_elbow'];
-            const k = kps['left_knee'];
-            if (!s) return "-";
-
-            const distEK = Math.hypot(e.x - k.x, e.y - k.y);
-            const distTorso = Math.hypot(s.x - h.x, s.y - h.y);
-            const normDist = (distEK / distTorso).toFixed(2);
-            const torsoDiff = Math.abs(s.y - h.y).toFixed(0);
-
-            return `EK:${normDist} | TorsoY:${torsoDiff}`;
-        }
-        return "-";
     }
 }
