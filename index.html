@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Workout Monitor</title>
+    
+    <!-- Dependencies -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap" rel="stylesheet">
+    
+    <!-- Styles -->
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <!-- Loading Overlay -->
+    <div id="loading">
+        <div class="loader"></div>
+        <div class="loading-text">AI 모델 로딩중...</div>
+    </div>
+
+    <div class="app-container">
+        <header>
+            <h1>AI Workout <span class="highlight">Monitor</span></h1>
+            <div class="exercise-selector">
+                <button class="mode-btn active" data-mode="pushup">Push-up</button>
+                <button class="mode-btn" data-mode="situp">Sit-up</button>
+            </div>
+        </header>
+
+        <main>
+            <div class="video-section">
+                <div class="video-container">
+                    <video id="video" playsinline muted></video>
+                    <canvas id="canvas"></canvas>
+                    <div id="feedback-overlay" class="feedback-text">Ready</div>
+                </div>
+
+                <!-- Controls -->
+                <div class="controls">
+                    <button class="btn btn-primary" id="btn-camera" onclick="app.startCamera()">
+                        <span class="icon">📷</span> 카메라 시작
+                    </button>
+                    <div class="upload-wrapper">
+                        <input type="file" id="file-in" accept="video/*" hidden>
+                        <button class="btn btn-secondary" onclick="document.getElementById('file-in').click()">
+                            <span class="icon">📂</span> 영상 업로드
+                        </button>
+                    </div>
+                    <button class="btn btn-danger" onclick="app.reset()">
+                        <span class="icon">↺</span> 리셋
+                    </button>
+                </div>
+            </div>
+
+            <!-- Dashboard -->
+            <div class="dashboard">
+                <div class="stat-card">
+                    <div class="stat-label">COUNT</div>
+                    <div class="stat-value" id="count-val">0</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">STATUS</div>
+                    <div class="stat-value status-ready" id="status-val">Ready</div>
+                </div>
+                <div class="stat-card small-card">
+                    <div class="stat-label">DEBUG INFO</div>
+                    <div class="stat-value small-text" id="debug-val">-</div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Scripts -->
+    <script src="js/exercises.js"></script>
+    <script src="js/pose.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
