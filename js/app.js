@@ -7,18 +7,34 @@ const app = {
     rafId: null,
     currentMode: 'pushup',
 
+    // State
+    isProcessing: false,
+    isAnalyzing: false,
+    isEncoding: false,
+    analysisData: [],
+    analysisStep: 0.05,
+
+    // Recording
+    mediaRecorder: null,
+    recordedChunks: [],
+
     init: async () => {
-        app.video = document.getElementById('video');
-        app.canvas = document.getElementById('canvas');
-        app.ctx = app.canvas.getContext('2d');
+        try {
+            app.video = document.getElementById('video');
+            app.canvas = document.getElementById('canvas');
+            app.ctx = app.canvas.getContext('2d');
 
-        app.detector = new PoseDetector();
-        app.counter = new ExerciseCounter();
+            app.detector = new PoseDetector();
+            app.counter = new ExerciseCounter();
 
-        await app.detector.init();
-        document.getElementById('loading').style.display = 'none';
+            await app.detector.init();
+            document.getElementById('loading').style.display = 'none';
 
-        app.setupListeners();
+            app.setupListeners();
+        } catch (e) {
+            console.error(e);
+            alert("Init Error: " + e.message);
+        }
     },
 
     setupListeners: () => {
@@ -38,108 +54,243 @@ const app = {
             }
         });
 
-        app.video.addEventListener('loadedmetadata', () => {
-            app.canvas.width = app.video.videoWidth;
-            app.canvas.height = app.video.videoHeight;
-            app.video.play();
-            app.loop();
+        // When video ends during encoding, stop recorder
+        app.video.addEventListener('ended', () => {
+            if (app.isEncoding) {
+                app.finishEncoding();
+            }
         });
     },
 
     setMode: (mode) => {
         app.currentMode = mode;
-        app.counter.setMode(mode);
-    },
-
-    startCamera: async () => {
-        if (app.rafId) cancelAnimationFrame(app.rafId);
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { width: 640, height: 480 }
-            });
-            app.video.srcObject = stream;
-        } catch (err) {
-            alert("Camera Error: " + err.message);
-        }
+        if (app.counter) app.counter.setMode(mode);
     },
 
     loadVideo: (src) => {
         if (app.rafId) cancelAnimationFrame(app.rafId);
-        if (app.video.srcObject) {
-            app.video.srcObject.getTracks().forEach(t => t.stop());
-            app.video.srcObject = null;
-        }
+
+        app.isProcessing = true;
+        app.video.controls = false;
+
+        // Important: Set the callback BEFORE src
+        app.video.onloadedmetadata = () => {
+            // Only auto-start analysis if we are in the initial processing state
+            if (app.isProcessing && !app.isEncoding && !app.video.src.startsWith('blob:')) {
+                app.startAnalysis();
+            }
+        };
+
         app.video.src = src;
     },
 
     reset: () => {
-        // Stop video playback and clear source
-        if (app.video.srcObject) {
-            app.video.srcObject.getTracks().forEach(t => t.stop());
-            app.video.srcObject = null;
+        if (app.mediaRecorder && app.mediaRecorder.state !== 'inactive') {
+            app.mediaRecorder.stop();
         }
+        app.isProcessing = false;
+        app.isAnalyzing = false;
+        app.isEncoding = false;
+
         app.video.pause();
-        app.video.removeAttribute('src'); // Completely remove src
-        app.video.load(); // Reload to clear visual buffer
+        app.video.onloadedmetadata = null; // Clear handler
+        app.video.removeAttribute('src');
+        app.video.load();
+        app.video.controls = true;
 
-        // Clear Canvas
         app.ctx.clearRect(0, 0, app.canvas.width, app.canvas.height);
+        if (app.counter) app.counter.reset();
+        app.analysisData = [];
 
-        // Reset Logic
-        app.counter.reset();
         app.updateUI({ count: 0, feedback: 'Ready', debug: '-' });
 
-        // Hide overlay text
-        document.getElementById('feedback-overlay').innerText = "";
+        const loader = document.getElementById('loading');
+        loader.style.display = 'none';
+        document.querySelector('.loading-text').innerText = "AI 모델 로딩중...";
     },
 
-    frameCount: 0,
+    // --- STEP 1: ANALYSIS ---
+    startAnalysis: async () => {
+        app.isAnalyzing = true;
+        app.analysisData = [];
+        app.counter.reset();
 
-    loop: async () => {
-        if (app.video.paused || app.video.ended) {
-            app.rafId = requestAnimationFrame(app.loop);
-            return;
+        const loader = document.getElementById('loading');
+        const text = document.querySelector('.loading-text');
+        loader.style.display = 'flex';
+
+        const duration = app.video.duration;
+        // Safety check
+        if (!duration || duration === Infinity) {
+            // Wait a bit or retry
+            await new Promise(r => setTimeout(r, 500));
         }
 
-        // Optimization: Skip frames to keep up with video (1 detection per 3 frames)
-        app.frameCount++;
-        if (app.frameCount % 3 !== 0) {
-            // Just draw the previous frame's results or clear/keep?
-            // If we don't draw, the canvas might blink. Better to NOT clear if we skipped.
-            // But we need to sync with video. 
-            // Let's just skip the heavy ESTIMATE.
-            app.rafId = requestAnimationFrame(app.loop);
-            return;
+        let currentTime = 0;
+
+        // Prevent infinite loop if duration is weird
+        const maxTime = app.video.duration || 600;
+
+        while (currentTime <= maxTime) {
+            text.innerText = `Analyzing... ${(currentTime / maxTime * 100).toFixed(0)}%`;
+
+            app.video.currentTime = currentTime;
+            await new Promise(r => {
+                const onSeek = () => { app.video.removeEventListener('seeked', onSeek); r(); };
+                app.video.addEventListener('seeked', onSeek);
+            });
+            await new Promise(r => setTimeout(r, 50));
+
+            try {
+                const poses = await app.detector.estimate(app.video);
+                const validPoses = poses.filter(p => p.score > 0.1);
+
+                let targetPose = null;
+                if (validPoses.length > 0) {
+                    targetPose = validPoses.reduce((prev, curr) => {
+                        const getX = (p) => (p.keypoints[0]?.x || 0);
+                        return (getX(curr) > getX(prev)) ? curr : prev;
+                    });
+                }
+
+                let countRes = null;
+                if (targetPose) {
+                    countRes = app.counter.process(targetPose.keypoints, null, currentTime);
+                }
+
+                app.analysisData.push({
+                    time: currentTime,
+                    pose: targetPose,
+                    result: countRes
+                });
+
+                app.ctx.clearRect(0, 0, app.canvas.width, app.canvas.height);
+                app.ctx.drawImage(app.video, 0, 0, app.canvas.width, app.canvas.height);
+
+            } catch (err) {
+                console.error("Analysis Error", err);
+            }
+
+            currentTime += app.analysisStep;
         }
 
-        const poses = await app.detector.estimate(app.video);
+        app.isAnalyzing = false;
+        app.startEncoding();
+    },
 
-        // Draw Results (Skeleton)
-        app.detector.drawResults(app.ctx, poses[0] ? poses[0].keypoints : [], app.currentMode);
+    // --- STEP 2: ENCODING ---
+    startEncoding: () => {
+        app.isEncoding = true;
+        const loader = document.getElementById('loading');
+        const text = document.querySelector('.loading-text');
+        text.innerText = "Creating Video Option... (Do not switch tabs)";
 
-        // Process Logic & Draw Debug Text (Angle)
-        if (poses.length > 0) {
-            const result = app.counter.process(poses[0].keypoints, app.ctx);
-            if (result) app.updateUI(result);
-        } else {
-            app.updateUI({ count: app.counter.count, feedback: 'No Pose', debug: 'Searching...' });
+        const stream = app.canvas.captureStream(30);
+        app.recordedChunks = [];
+
+        const options = MediaRecorder.isTypeSupported('video/webm; codecs=vp9')
+            ? { mimeType: 'video/webm; codecs=vp9' }
+            : { mimeType: 'video/webm' };
+
+        app.mediaRecorder = new MediaRecorder(stream, options);
+
+        app.mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) app.recordedChunks.push(e.data);
+        };
+
+        app.mediaRecorder.start();
+
+        app.video.currentTime = 0;
+        app.video.muted = true;
+        app.video.playbackRate = 1.0;
+        app.video.play().catch(e => console.error("Play failed", e));
+
+        app.renderForRecording();
+    },
+
+    renderForRecording: () => {
+        if (!app.isEncoding) return;
+
+        app.ctx.clearRect(0, 0, app.canvas.width, app.canvas.height);
+        app.ctx.drawImage(app.video, 0, 0, app.canvas.width, app.canvas.height);
+
+        const t = app.video.currentTime;
+        const rawIndex = t / app.analysisStep;
+        const index = Math.round(rawIndex);
+
+        if (index >= 0 && index < app.analysisData.length) {
+            const data = app.analysisData[index];
+            if (data && data.pose) {
+                const kpsToDraw = data.pose.keypoints.filter((k, i) => i >= 5 && i <= 14);
+                app.detector.drawResults(app.ctx, kpsToDraw, app.currentMode);
+
+                if (data.result) {
+                    app.drawOverlayText(data.result);
+                }
+            }
         }
 
-        app.rafId = requestAnimationFrame(app.loop);
+        const text = document.querySelector('.loading-text');
+        if (text && app.video.duration) {
+            text.innerText = `Generating Video... ${(t / app.video.duration * 100).toFixed(0)}%`;
+        }
+
+        requestAnimationFrame(app.renderForRecording);
+    },
+
+    drawOverlayText: (result) => {
+        app.ctx.save();
+        // Semi-transparent box
+        app.ctx.fillStyle = "rgba(0,0,0,0.5)";
+        app.ctx.beginPath();
+        app.ctx.roundRect(20, 20, 250, 100, 10);
+        app.ctx.fill();
+
+        // Count
+        app.ctx.fillStyle = "#00ff88"; // Neon green
+        app.ctx.font = "bold 50px Arial";
+        app.ctx.fillText(result.count, 40, 75);
+
+        // status
+        app.ctx.font = "20px Arial";
+        app.ctx.fillStyle = "white";
+        app.ctx.fillText(result.feedback, 40, 105);
+
+        app.ctx.restore();
+    },
+
+    finishEncoding: () => {
+        console.log("Encoding Finished.");
+        app.isEncoding = false;
+        app.mediaRecorder.stop();
+
+        setTimeout(() => {
+            const blob = new Blob(app.recordedChunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+
+            // CRITICAL FIX: Disable callback before setting new src
+            app.video.onloadedmetadata = null;
+
+            app.video.src = url;
+            app.video.muted = false;
+            app.video.controls = true;
+            app.video.currentTime = 0;
+            app.video.loop = true; // Loop the result?
+
+            const loader = document.getElementById('loading');
+            loader.style.display = 'none';
+
+            console.log("Swapped to Blob URL");
+
+            // Should be ready to play manually
+            alert("Video Ready! Press Play.");
+
+        }, 500);
     },
 
     updateUI: (data) => {
-        document.getElementById('count-val').innerText = data.count;
-        document.getElementById('status-val').innerText = data.feedback;
-        document.getElementById('debug-val').innerText = data.debug;
-
-        if (data.feedback.includes('Count') || data.feedback.includes('Sit-up')) {
-            document.getElementById('status-val').className = 'stat-value status-active';
-        } else {
-            document.getElementById('status-val').className = 'stat-value status-ready';
-        }
-
-        document.getElementById('feedback-overlay').innerText = data.feedback;
+        const countEl = document.getElementById('count-val');
+        if (countEl) countEl.innerText = data.count;
     }
 };
 

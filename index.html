@@ -1,10 +1,11 @@
 <!DOCTYPE html>
 <html lang="ko">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Workout Monitor</title>
-    
+
     <!-- Dependencies -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
@@ -13,10 +14,11 @@
 
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;500;700&display=swap" rel="stylesheet">
-    
+
     <!-- Styles -->
     <link rel="stylesheet" href="css/style.css">
 </head>
+
 <body>
 
     <!-- Loading Overlay -->
@@ -37,22 +39,25 @@
         <main>
             <div class="video-section">
                 <div class="video-container">
-                    <video id="video" playsinline muted></video>
+                    <video id="video" playsinline muted controls></video>
                     <canvas id="canvas"></canvas>
                     <div id="feedback-overlay" class="feedback-text">Ready</div>
                 </div>
 
                 <!-- Controls -->
                 <div class="controls">
-                    <button class="btn btn-primary" id="btn-camera" onclick="app.startCamera()">
-                        <span class="icon">📷</span> 카메라 시작
-                    </button>
                     <div class="upload-wrapper">
                         <input type="file" id="file-in" accept="video/*" hidden>
                         <button class="btn btn-secondary" onclick="document.getElementById('file-in').click()">
                             <span class="icon">📂</span> 영상 업로드
                         </button>
                     </div>
+                    <button class="btn btn-secondary" onclick="app.loadVideo('situpmaster.mp4')">
+                        <span class="icon">🎬</span> 마스터 영상
+                    </button>
+                    <button class="btn btn-secondary" onclick="app.replayVideo()">
+                        <span class="icon">⏮</span> 다시보기
+                    </button>
                     <button class="btn btn-danger" onclick="app.reset()">
                         <span class="icon">↺</span> 리셋
                     </button>
@@ -82,4 +87,5 @@
     <script src="js/pose.js"></script>
     <script src="js/app.js"></script>
 </body>
+
 </html>

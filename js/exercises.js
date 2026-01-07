@@ -1,7 +1,5 @@
 class ExerciseCounter {
     constructor() {
-        this.reset();
-        // MoveNet Keypoint Indices
         this.IDX = {
             NOSE: 0,
             L_SHOULDER: 5, R_SHOULDER: 6,
@@ -11,14 +9,17 @@ class ExerciseCounter {
             L_KNEE: 13, R_KNEE: 14,
             L_ANKLE: 15, R_ANKLE: 16
         };
+        this.reset();
     }
 
     reset() {
         this.count = 0;
-        this.state = 0; // 0: Start, 1: Action (Down/Up)
+        this.state = 0; // 0: Start(Down), 1: Up/Action
         this.feedback = "Ready";
-        this.mode = 'pushup';
         this.debugText = "";
+        this.lastCountTime = -1000;
+        this.startTime = 0;
+        this.minAngleEHK = 180;
     }
 
     setMode(mode) {
@@ -26,20 +27,24 @@ class ExerciseCounter {
         this.reset();
     }
 
-    process(keypoints, ctx) {
+    getPoint(kps, idx) {
+        if (!kps[idx] || kps[idx].score < 0.1) return null;
+        return kps[idx];
+    }
+
+    process(keypoints, ctx, timestamp) {
         if (!keypoints) return;
 
-        // Draw Debug Text on Canvas
-        if (ctx) {
-            ctx.font = '24px Arial';
-            ctx.fillStyle = 'yellow';
-            ctx.fillText(this.debugText, 20, 40);
+        // 1. Warm-up
+        if (timestamp < 3.0) {
+            const timeLeft = 3 - Math.floor(timestamp);
+            return { count: this.count, feedback: `Starting in ${timeLeft}...`, debug: "Warm-up" };
         }
 
         if (this.mode === 'pushup') {
-            this.processPushup(keypoints);
+            this.processPushup(keypoints, timestamp);
         } else if (this.mode === 'situp') {
-            this.processSitup(keypoints);
+            this.processSitup(keypoints, timestamp);
         }
 
         return {
@@ -49,122 +54,100 @@ class ExerciseCounter {
         };
     }
 
-    getPoint(kps, idx) {
-        // Lower threshold (0.2) for robustness, especially in difficult angles like sit-ups
-        if (!kps[idx] || kps[idx].score < 0.1) return null;
-        return kps[idx];
-    }
-
-    // --- PUSH-UP LOGIC ---
-    processPushup(kps) {
+    processPushup(kps, timestamp) {
         const ls = this.getPoint(kps, this.IDX.L_SHOULDER);
         const le = this.getPoint(kps, this.IDX.L_ELBOW);
         const lw = this.getPoint(kps, this.IDX.L_WRIST);
-
         const rs = this.getPoint(kps, this.IDX.R_SHOULDER);
         const re = this.getPoint(kps, this.IDX.R_ELBOW);
         const rw = this.getPoint(kps, this.IDX.R_WRIST);
 
-        // Choose side with better visibility
-        let side = null; // 'left' or 'right'
-        let s, e, w; // shoulder, elbow, wrist
-
+        let s, e, w;
         const lScore = (ls?.score || 0) + (le?.score || 0) + (lw?.score || 0);
         const rScore = (rs?.score || 0) + (re?.score || 0) + (rw?.score || 0);
+        if (lScore > rScore && lScore > 0.9) { s = ls; e = le; w = lw; }
+        else if (rScore > 0.9) { s = rs; e = re; w = rw; }
 
-        if (lScore > rScore && lScore > 0.9) {
-            side = 'left'; s = ls; e = le; w = lw;
-        } else if (rScore > 0.9) {
-            side = 'right'; s = rs; e = re; w = rw;
-        }
-
-        if (!side) {
-            this.feedback = "No Pose";
-            return;
-        }
+        if (!s) { this.feedback = "Pose?"; return; }
 
         const angle = this.calculateAngle(s, e, w);
         this.debugText = `Angle: ${Math.round(angle)}°`;
 
-        // Logic
-        // Down: Angle < 90
-        // Up: Angle > 160
-        if (angle <= 90) {
+        const UP_THRES = 160;
+        const DOWN_THRES = 90;
+
+        if (angle <= DOWN_THRES) {
             if (this.state === 0 || this.state === 2) {
                 this.state = 1;
                 this.feedback = "Down ▼";
             }
-        } else if (angle >= 160) {
+        } else if (angle >= UP_THRES) {
             if (this.state === 1) {
                 this.count++;
                 this.state = 2;
-                this.feedback = "Up ▲ (Count!)";
-            } else {
-                this.feedback = "Ready";
+                this.feedback = "Up ▲";
             }
         }
     }
 
-    // --- SIT-UP LOGIC ---
-    processSitup(kps) {
-        // 1. Decide which side is visible (Left vs Right)
-        const leftScore = (kps[this.IDX.L_SHOULDER]?.score || 0) + (kps[this.IDX.L_HIP]?.score || 0) + (kps[this.IDX.L_KNEE]?.score || 0);
-        const rightScore = (kps[this.IDX.R_SHOULDER]?.score || 0) + (kps[this.IDX.R_HIP]?.score || 0) + (kps[this.IDX.R_KNEE]?.score || 0);
+    processSitup(kps, timestamp) {
+        const leftScore = (kps[this.IDX.L_HIP]?.score || 0) + (kps[this.IDX.L_KNEE]?.score || 0) + (kps[this.IDX.L_ELBOW]?.score || 0);
+        const rightScore = (kps[this.IDX.R_HIP]?.score || 0) + (kps[this.IDX.R_KNEE]?.score || 0) + (kps[this.IDX.R_ELBOW]?.score || 0);
 
         const isLeft = leftScore > rightScore;
         const s = this.getPoint(kps, isLeft ? this.IDX.L_SHOULDER : this.IDX.R_SHOULDER);
         const h = this.getPoint(kps, isLeft ? this.IDX.L_HIP : this.IDX.R_HIP);
         const k = this.getPoint(kps, isLeft ? this.IDX.L_KNEE : this.IDX.R_KNEE);
-        const nose = this.getPoint(kps, this.IDX.NOSE);
+        const e = this.getPoint(kps, isLeft ? this.IDX.L_ELBOW : this.IDX.R_ELBOW);
 
-        if (!s || !h || !k) {
+        if (!h || !k || !e || !s) {
             this.feedback = "Pose?";
-            this.debugText = "Need Side Body";
+            this.debugText = "Need Points";
             return;
         }
 
-        // 2. UP CHECK: Nose close to Knee
-        // If nose is missing, fallback to Elbow-Knee? 
-        // Or just use Shoulder-Knee distance getting small?
-        // Let's stick to Nose-Knee if Nose exists, else Shoulder-Knee.
+        const angleEHK = this.calculateAngle(e, h, k);
+        const torsoLen = Math.hypot(s.x - h.x, s.y - h.y) || 1;
+        const dy = Math.abs(s.y - h.y);
+        const flatRatio = dy / torsoLen;
 
-        let distTarget = 0;
-        let distRef = Math.hypot(s.x - h.x, s.y - h.y); // Torso length
+        const UP_ANGLE = 50;
+        const DOWN_RATIO = 0.6; // Relaxed to 0.6 from 0.5
 
-        if (nose) {
-            distTarget = Math.hypot(nose.x - k.x, nose.y - k.y);
-        } else {
-            // Fallback: Shoulder to Knee
-            distTarget = Math.hypot(s.x - k.x, s.y - k.y);
-            // Relax threshold for Shoulder-Knee
-            distRef = distRef * 1.5;
+        const isUp = angleEHK < UP_ANGLE;
+        const isDown = flatRatio < DOWN_RATIO;
+
+        if (angleEHK < this.minAngleEHK) {
+            this.minAngleEHK = angleEHK;
         }
 
-        const normDist = distTarget / distRef;
-        const isUp = normDist < 1.1; // < 1.1 means nose/shoulder is close to knee relative to torso
+        this.debugText = `Ang:${Math.round(angleEHK)} | Flat:${flatRatio.toFixed(2)}`;
 
-        // 3. DOWN CHECK: Torso Flat (Horizontal)
-        // Check difference in Y between Shoulder and Hip
-        const dy = Math.abs(s.y - h.y);
-        const isDown = dy < 50;
-
-        this.debugText = `Dist:${normDist.toFixed(2)} | Flat:${Math.round(dy)}`;
-
-        // State Machine
         if (isDown) {
             if (this.state === 1) {
                 this.state = 0;
                 this.feedback = "Down (Reset)";
+                this.minAngleEHK = 180;
             } else {
-                this.feedback = "Ready";
+                if (this.minAngleEHK < 80 && this.minAngleEHK > UP_ANGLE) {
+                    this.feedback = `No Count: Best ${Math.round(this.minAngleEHK)}°`;
+                } else {
+                    this.feedback = "Ready";
+                }
+                this.minAngleEHK = 180;
             }
         }
-
-        if (isUp) {
+        else if (isUp) {
             if (this.state === 0) {
-                this.state = 1;
-                this.count++;
-                this.feedback = "Sit-up! ▲";
+                // REDUCED DEBOUNCE to 0.4s
+                if (timestamp - this.lastCountTime > 0.4) {
+                    this.state = 1;
+                    this.count++;
+                    this.lastCountTime = timestamp;
+                    this.feedback = "Sit-up! ▲";
+                }
+            } else {
+                this.feedback = "Down Now ▼";
             }
         }
     }

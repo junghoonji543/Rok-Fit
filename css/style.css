@@ -83,28 +83,38 @@ h1 {
 .video-container {
     position: relative;
     width: 100%;
-    aspect-ratio: 4/3;
+    /* Removed aspect-ratio to prevent cropping of controls */
     background: #000;
     border-radius: 16px;
     overflow: hidden;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
-video, canvas {
+video {
+    position: relative;
+    /* Changed from absolute */
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+canvas {
     position: absolute;
     top: 0;
     left: 0;
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    pointer-events: none;
+    /* Allows clicks to pass through to video controls */
 }
 
 .feedback-text {
     position: absolute;
-    bottom: 20px;
+    bottom: 40px;
+    /* Moved up slightly to avoid overlapping controls */
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(0,0,0,0.6);
+    background: rgba(0, 0, 0, 0.6);
     padding: 5px 15px;
     border-radius: 15px;
     font-size: 1.2rem;
@@ -133,11 +143,25 @@ video, canvas {
     transition: transform 0.2s, background 0.2s;
 }
 
-.btn:active { transform: scale(0.96); }
+.btn:active {
+    transform: scale(0.96);
+}
 
-.btn-primary { background: var(--primary-color); color: white; }
-.btn-secondary { background: var(--secondary-color); color: white; }
-.btn-danger { background: var(--card-bg); border: 1px solid var(--accent-red); color: var(--accent-red); }
+.btn-primary {
+    background: var(--primary-color);
+    color: white;
+}
+
+.btn-secondary {
+    background: var(--secondary-color);
+    color: white;
+}
+
+.btn-danger {
+    background: var(--card-bg);
+    border: 1px solid var(--accent-red);
+    color: var(--accent-red);
+}
 
 /* Dashboard */
 .dashboard {
@@ -170,14 +194,32 @@ video, canvas {
     color: var(--highlight-color);
 }
 
-.small-card { grid-column: span 2; padding: 10px; }
-.small-text { font-size: 1rem; color: #666; font-family: monospace; }
-.status-ready { color: #888; }
-.status-active { color: var(--accent-green); }
+.small-card {
+    grid-column: span 2;
+    padding: 10px;
+}
+
+.small-text {
+    font-size: 1rem;
+    color: #666;
+    font-family: monospace;
+}
+
+.status-ready {
+    color: #888;
+}
+
+.status-active {
+    color: var(--accent-green);
+}
 
 /* Loading */
 #loading {
-    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
     background: rgba(18, 18, 18, 0.95);
     z-index: 1000;
     display: flex;
@@ -185,12 +227,23 @@ video, canvas {
     justify-content: center;
     align-items: center;
 }
+
 .loader {
-    width: 48px; height: 48px;
+    width: 48px;
+    height: 48px;
     border: 5px solid #FFF;
     border-bottom-color: var(--primary-color);
     border-radius: 50%;
     animation: rotation 1s linear infinite;
     margin-bottom: 20px;
 }
-@keyframes rotation { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+@keyframes rotation {
+    0% {
+        transform: rotate(0deg);
+    }
+
+    100% {
+        transform: rotate(360deg);
+    }
+}

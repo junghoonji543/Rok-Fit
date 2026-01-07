@@ -2,7 +2,10 @@ class PoseDetector {
     constructor() {
         this.detector = null;
         this.model = poseDetection.SupportedModels.MoveNet;
-        this.config = { modelType: poseDetection.movenet.modelType.SINGLEPOSE_LIGHTNING };
+        this.config = {
+            modelType: poseDetection.movenet.modelType.MULTIPOSE_LIGHTNING,
+            enableSmoothing: true
+        };
     }
 
     async init() {
